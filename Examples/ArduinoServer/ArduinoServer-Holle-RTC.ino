@@ -2,12 +2,28 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <SD.h>
-#include <DS1302.h>
 #include <stdio.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <IRremote.h>
 
 // size of buffer used to capture HTTP requests
 #define REQ_BUF_SZ   60
+#define ONE_WIRE_BUS 34  
+#define GERKON_PIN 36
 
+//температура
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+float tempSensor1 = 1.0;
+float tempSensor2 = 1.0;
+int temp1 = 1;
+int temp2 = 2;
+
+int val = 0; //статус геркона цифрами
+String gerkonstatus = "temp"; //статус геркона буквами
+
+IRsend irsend; //pin 3 
 
 // MAC address from Ethernet shield sticker under board
 byte mac[] = {
@@ -33,6 +49,9 @@ void setup()
   pinMode(17, OUTPUT);
  
   Serial.begin(9600);       // for debugging
+  
+  sensors.begin(); //включаем темп. сенсоры
+  sensors.setResolution(10);
 
   Ethernet.begin(mac, ip);  // initialize Ethernet device
   server.begin();           // start to listen for clients
@@ -69,6 +88,9 @@ void loop()
           client.println();
           //место собственных функций
           SetLights();
+          sensorTempRead();  //Опрос датчика температуры
+          getGerkon(); //состояние геркона
+          setTV(); //отправляем команды на IR led
           // send XML file containing input states
           XML_response(client);
           // display received HTTP request on serial port
@@ -95,6 +117,27 @@ void loop()
   } // end if (client)
 }
 
+
+// Опрос датчиков температуры
+void sensorTempRead()
+{   
+  sensors.requestTemperatures(); // Send the command to get temperatures
+  tempSensor1 = sensors.getTempCByIndex(0);
+  tempSensor2 = sensors.getTempCByIndex(1);
+  
+  temp1 = (int) tempSensor1;
+  temp2 = (int) tempSensor2;
+  
+}
+
+void getGerkon(){
+   val = digitalRead(GERKON_PIN);//читаем состояние геркона
+     if (val == 1) { // Если Door_Sensor N.C. (без магнита) -> HIGH : Дверь открыта / LOW : Дверь закрыта
+    gerkonstatus = "off";
+  } else {
+    gerkonstatus = "on";
+  }
+}
 
 // checks if received HTTP request is switching on/off LEDs
 // also saves the state of the LEDs
@@ -137,6 +180,30 @@ void SetLights (void) {
   }
 }
 
+void setTV(void) {
+    if (StrContains(HTTP_req, "soundmulti")) {
+    irsend.sendSAMSUNG(0xE0E0F00F, 32); //Mute
+  }
+    if (StrContains(HTTP_req, "volupmulti")) {
+     irsend.sendSAMSUNG(0xE0E0E01F, 32); //Vol.Up
+  }
+    if (StrContains(HTTP_req, "voldownmulti")) {
+    irsend.sendSAMSUNG(0xE0E0D02F, 32); //Vol.Down
+  }
+    if (StrContains(HTTP_req, "onmulti")) {
+    irsend.sendSAMSUNG(0xE0E0807F, 32); //Source
+  }
+    if (StrContains(HTTP_req, "backmulti")) {
+     irsend.sendSAMSUNG(0xE0E008F7, 32); //Ch.Back
+  }
+    if (StrContains(HTTP_req, "forwmulti")) {
+    irsend.sendSAMSUNG(0xE0E048B7, 32); //Ch.Next
+  }
+    if (StrContains(HTTP_req, "playmulti")) {
+    irsend.sendSAMSUNG(0xE0E040BF, 32); //On.Off
+  }
+}
+
 // send the XML file with analog values, switch status
 //  and LED status
 void XML_response(EthernetClient cl)
@@ -155,7 +222,7 @@ void XML_response(EthernetClient cl)
   cl.println("</current>");
   //температура
   cl.print("<bed_temp>");
-  cl.print("25");
+  cl.print(temp1);
   cl.println("</bed_temp>");
   cl.print("<kitch_temp>");
   cl.print("22");
@@ -164,7 +231,7 @@ void XML_response(EthernetClient cl)
   cl.print("26");
   cl.println("</toil_temp>");
   cl.print("<street_temp>");
-  cl.print("-10");
+  cl.print(temp2);
   cl.println("</street_temp>");
   //протечки
   cl.print("<toil_water>");
@@ -181,7 +248,7 @@ void XML_response(EthernetClient cl)
   cl.println("</kitch_water>");
   //Двери
   cl.print("<main_door>");
-  cl.print("on"); // читаем время из буфера 
+  cl.print(gerkonstatus); // читаем время из буфера 
   cl.println("</main_door>");
   cl.print("<bed_wind>");
   cl.print("off");
